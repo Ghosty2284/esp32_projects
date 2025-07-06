@@ -1,0 +1,91 @@
+// Code to print distance and signal strength
+
+
+#include <Wire.h>
+
+#define SDA_PIN 8
+#define SCL_PIN 9
+#define TF_LUNA_ADDR 0x10
+
+#define MEASURE_INTERVAL 100  // in milliseconds, user-defined frame rate
+#define MIN_DISTANCE 10       // mm
+#define MAX_DISTANCE 3000     // mm
+
+bool measuring = false;
+unsigned long lastMeasureTime = 0;
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(SDA_PIN, SCL_PIN);
+  Serial.println("Send 'start' to begin, 'stop' to end measurement.");
+}
+
+void loop() {
+  // Check for serial input
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    cmd.toLowerCase();
+
+    if (cmd == "start") {
+      measuring = true;
+      Serial.println("Measurement started...");
+    } else if (cmd == "stop") {
+      measuring = false;
+      Serial.println("Measurement stopped.");
+    }
+  }
+
+  if (measuring && millis() - lastMeasureTime >= MEASURE_INTERVAL) {
+    lastMeasureTime = millis();
+    int distance = readDistance();
+    int strength = readSignalStrength();
+
+    if (distance != -1) {
+      Serial.print("Distance: ");
+      Serial.print(distance);
+      Serial.print(" mm\tSignal Strength: ");
+      Serial.println(strength);
+    } else {
+      Serial.println("Sensor error or out of range.");
+    }
+  }
+}
+
+// === Function: Read distance and strength from TF-Luna ===
+int readDistance() {
+  Wire.beginTransmission(TF_LUNA_ADDR);
+  Wire.write(0x00); // Request data frame
+  if (Wire.endTransmission() != 0) return -1;
+
+  Wire.requestFrom((uint8_t)TF_LUNA_ADDR, (uint8_t)7);
+  if (Wire.available() < 7) return -1;
+
+  byte data[7];
+  for (int i = 0; i < 7; i++) {
+    data[i] = Wire.read();
+  }
+
+  int dist = (data[1] << 8) | data[0];     // Distance in cm
+  dist *= 10;  // Convert to mm
+
+  if (dist < MIN_DISTANCE || dist > MAX_DISTANCE) return -1;
+  return dist;
+}
+
+int readSignalStrength() {
+  Wire.beginTransmission(TF_LUNA_ADDR);
+  Wire.write(0x00);
+  if (Wire.endTransmission() != 0) return -1;
+
+  Wire.requestFrom((uint8_t)TF_LUNA_ADDR, (uint8_t)7);
+  if (Wire.available() < 7) return -1;
+
+  byte data[7];
+  for (int i = 0; i < 7; i++) {
+    data[i] = Wire.read();
+  }
+
+  int strength = (data[3] << 8) | data[2];
+  return strength;
+}
