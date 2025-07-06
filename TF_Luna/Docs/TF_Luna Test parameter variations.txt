@@ -1,0 +1,41 @@
+TF_Luna Test parameter variations
+
+
+DISTANCE VARIATIONS: 
+
+20  cm
+50  cm 
+100 cm
+200 cm
+400 cm
+600 cm
+800 cm
+_____________________________________________________
+
+FRAME RATE (Hz) VARIATION
+
+10  Hz ------ >  100ms
+50  Hz ------->  20ms
+100 Hz ------->  10ms
+150 Hz ------->  6.67ms => 7ms
+200 Hz ------->  5ms
+250 Hz ------->  4ms
+
+_______________________________________________________
+
+Enviornment Variation 
+
+1. Direct Sunlight 
+
+2. Ambient light - Room light
+
+3. Low light/Night - Dark room 
+________________________________________________________
+
+Object
+
+1. Normal colour
+
+2. White colour
+
+3. Black colour object
