@@ -1,0 +1,63 @@
+// The following code is used to toggle between Low power mode and Normal mode
+
+#include <Wire.h>
+
+#define LUNA_I2C_ADDRESS 0x10  // Default I2C address for TF-Luna
+#define SDA_PIN 8              // ESP32-S3 SDA pin
+#define SCL_PIN 9              // ESP32-S3 SCL pin
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(SDA_PIN, SCL_PIN);
+  
+  Serial.println("\nTF-Luna Ultra-Low Power Mode Control");
+  Serial.println("-----------------------------------");
+  Serial.println("Send 'ON' to enable Ultra-Low Power Mode");
+  Serial.println("Send 'OFF' to disable Ultra-Low Power Mode");
+  Serial.println("-----------------------------------");
+}
+
+void loop() {
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');
+    command.trim(); // Remove whitespace
+    
+    if (command.equalsIgnoreCase("ON")) {
+      enableUltraLowPowerMode();
+      Serial.println("Ultra-Low Power Mode ENABLED");
+    } 
+    else if (command.equalsIgnoreCase("OFF")) {
+      disableUltraLowPowerMode();
+      Serial.println("Ultra-Low Power Mode DISABLED");
+    } 
+    else {
+      Serial.println("Invalid command! Use 'ON' or 'OFF'");
+    }
+  }
+}
+
+// ===== HELPER FUNCTIONS =====
+
+void enableUltraLowPowerMode() {
+  // Write [0x01, 0x01, 0x02] to register 0x1F (enable & save)
+  Wire.beginTransmission(LUNA_I2C_ADDRESS);
+  Wire.write(0x1F);  // Ultra-Low Power register
+  Wire.write(0x01);  // Enable
+  Wire.write(0x01);  // Required byte
+  Wire.write(0x02);  // Save settings
+  Wire.endTransmission();
+  
+  delay(100); // Small delay for stability
+}
+
+void disableUltraLowPowerMode() {
+  // Write [0x00, 0x01, 0x02] to register 0x1F (disable & save)
+  Wire.beginTransmission(LUNA_I2C_ADDRESS);
+  Wire.write(0x1F);  // Ultra-Low Power register
+  Wire.write(0x00);  // Disable
+  Wire.write(0x01);  // Required byte
+  Wire.write(0x02);  // Save settings
+  Wire.endTransmission();
+  
+  delay(100); // Small delay for stability
+}
