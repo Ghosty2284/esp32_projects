@@ -1,1 +1,11 @@
+This project contains  interfacing multiple  p10  led boards with esp32  for following applications.
 
+1. Static Text
+
+2. Scrolling Text
+
+3. Custom font building
+
+4. Using ESP-NOW protocol to send text remotely
+
+5. Using BLE protocol to send text remotely 
