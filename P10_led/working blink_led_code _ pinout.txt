@@ -1,8 +1,0 @@
-working code _ pinout 
-OE → ESP32 pin 15
-A → ESP32 pin 23
-B → ESP32 pin 19
-LAT → ESP32 pin 4
-DR → ESP32 pin 25
-CLK → ESP32 pin 16
-GND → ESP32 GND + Power Supply GND
