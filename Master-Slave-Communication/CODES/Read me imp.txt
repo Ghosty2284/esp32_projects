@@ -1,0 +1,17 @@
+Read me imp
+
+1. ESP32 mac code is used to get receiver address
+
+2. esp32 master is based on esp32 s3 mcu and works on library version 3.0.2 ( esp32 board library by expressif on Arduino ide)
+
+3. ESP32 slave is based on esp32 wroom ( esp32 dev module on ide ) and based on board libaray version 1.0.6 !!!!!!
+---------------------------------------------------------------------------------------------------------------------
+NOTE : ESP32 BOARD VERSION 1.0.6 ZIP LIBARAY IS ADDED 
+
+-------------------------------------------------------------------------------------------------------------------
+
+=> BLE PROTOCOL SAVES 100x power & range : 50m - 80m
+
+
+==> ESP NOW PROTOCOL  Range : 100m+ ; long range mode : 500m + 
+
