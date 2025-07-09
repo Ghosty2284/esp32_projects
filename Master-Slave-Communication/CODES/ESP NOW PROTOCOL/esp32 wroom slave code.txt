@@ -1,0 +1,74 @@
+//esp32 wroom slave code 
+
+#include <DMD32.h>
+#include <fonts/Arial_black_16.h>
+#include <esp_now.h>
+#include <WiFi.h>
+
+#define DISPLAYS_ACROSS 1
+#define DISPLAYS_DOWN 1
+DMD dmd(DISPLAYS_ACROSS, DISPLAYS_DOWN);
+hw_timer_t* timer = NULL;
+
+typedef struct struct_message {
+  char message[32];
+} struct_message;
+
+struct_message incomingMessage;
+bool newMessageAvailable = false;
+
+void IRAM_ATTR triggerScan() {
+  dmd.scanDisplayBySPI();
+}
+
+void onDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+  memcpy(&incomingMessage, incomingData, sizeof(incomingMessage));
+  Serial.print("Received: ");
+  Serial.println(incomingMessage.message);
+  newMessageAvailable = true;
+}
+
+void setupTimer() {
+  uint8_t cpuClock = ESP.getCpuFreqMHz();
+  timer = timerBegin(0, cpuClock, true);
+  timerAttachInterrupt(timer, &triggerScan, true);
+  timerAlarmWrite(timer, 300, true);
+  timerAlarmEnable(timer);
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.mode(WIFI_STA); // Required for ESP-NOW
+
+  setupTimer();
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Error initializing ESP-NOW");
+    return;
+  }
+
+  esp_now_register_recv_cb(onDataRecv);
+}
+
+void loop() {
+  if (newMessageAvailable) {
+    newMessageAvailable = false;
+
+    dmd.selectFont(Arial_Black_16);
+    dmd.clearScreen(true);
+    delay(500);
+
+    dmd.drawMarquee(incomingMessage.message, strlen(incomingMessage.message), (32 * DISPLAYS_ACROSS) - 1, 0);
+    long start = millis();
+    long timerScroll = start;
+    boolean done = false;
+
+    while (!done) {
+      if ((timerScroll + 30) < millis()) {
+        done = dmd.stepMarquee(-1, 0);
+        delay(50);
+        timerScroll = millis();
+      }
+    }
+  }
+}
