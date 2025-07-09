@@ -1,0 +1,6 @@
+This project contains the use of communication protocols of ESP32 specifically ESP_NOW & BLE 
+
+I have used the p10 led board as slave and a 2nd esp32 as master .
+Master will send the string to slave and then slave will send command to led board to display.
+
+We can later replace master with any mobile or lapop application for remote access.
