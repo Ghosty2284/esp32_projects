@@ -1,7 +1,0 @@
-p10_brightness_power consumption
-
-
-Highest Brightness : 5V ; 3.7A 
-But also working for : 3.5V ,2.67 A current
-
-Lowest Brightness : 5V , 0.5A
