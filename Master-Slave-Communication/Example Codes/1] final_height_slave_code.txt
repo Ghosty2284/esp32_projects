@@ -1,0 +1,138 @@
+// FINAL SLAVE CODE TO import name ,height data AND DISPLAY NAME,AGE,H1 TO H8 DATA FOR SCROLLING
+// ON 2 P10 DISPLAY
+
+#include <DMD32.h>                     // Library for Dot Matrix Display (DMD) control
+#include <fonts/SystemFont5x7.h>       // Font used for the display
+#include <esp_now.h>                   // ESP-NOW communication library
+#include <WiFi.h>                      // WiFi library for ESP32
+
+#define DISPLAYS_ACROSS 2             // Number of displays horizontally
+#define DISPLAYS_DOWN 1               // Number of displays vertically
+DMD dmd(DISPLAYS_ACROSS, DISPLAYS_DOWN);  // Create DMD object
+hw_timer_t* timer = nullptr;          // Pointer to hardware timer
+
+// Define structure to receive data
+typedef struct struct_message {
+  float crown_height, shoulder_height, chest_height;
+  float belly_height, hip_height, knee_height;
+  float hand_reach, elbow_reach;
+  char name[32];
+  char age[8];
+  char message[32];
+} struct_message;
+
+struct_message incomingMessage;       // Stores incoming ESP-NOW data
+bool newMessageAvailable = false;     // Flag to indicate new data received
+
+// Variables for each height value and received name/age
+float h1, h2, h3, h4, h5, h6, h7, h8;
+String rec_name, rec_age;
+
+char scrollText[300];  // Buffer for scrolling message
+
+// ISR to trigger display refresh
+void IRAM_ATTR triggerScan() {
+  dmd.scanDisplayBySPI();
+}
+
+// Callback when ESP-NOW data is received
+void onDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
+  // Copy received data into structured variable
+  memcpy(&incomingMessage, incomingData, sizeof(incomingMessage));
+
+  // Assign received values to local variables
+  rec_name = String(incomingMessage.name);
+  rec_age = String(incomingMessage.age);
+  h1 = incomingMessage.crown_height;
+  h2 = incomingMessage.shoulder_height;
+  h3 = incomingMessage.chest_height;
+  h4 = incomingMessage.belly_height;
+  h5 = incomingMessage.hip_height;
+  h6 = incomingMessage.knee_height;
+  h7 = incomingMessage.hand_reach;
+  h8 = incomingMessage.elbow_reach;
+
+  // Display received values on Serial Monitor
+  Serial.println("\n===== New Data Received via ESP-NOW =====");
+  Serial.printf("\nName : %s", rec_name.c_str());
+  Serial.printf("\nAge : %s", rec_age.c_str());
+  Serial.printf("\nh1 (Crown Height)   : %.2f cm", h1);
+  Serial.printf("\nh2 (Shoulder Height): %.2f cm", h2);
+  Serial.printf("\nh3 (Chest Height)   : %.2f cm", h3);
+  Serial.printf("\nh4 (Belly Height)   : %.2f cm", h4);
+  Serial.printf("\nh5 (Hip Height)     : %.2f cm", h5);
+  Serial.printf("\nh6 (Knee Height)    : %.2f cm", h6);
+  Serial.printf("\nh7 (Hand Reach)     : %.2f cm", h7);
+  Serial.printf("\nh8 (Elbow Reach)    : %.2f cm", h8);
+  Serial.printf("\nMessage             : %s\n", incomingMessage.message);
+  Serial.println("==========================================\n");
+
+  // Format the scrolling text message
+  snprintf(scrollText, sizeof(scrollText),
+    " Name:%s  Age:%s  h1:%.1f  h2:%.1f  h3:%.1f  h4:%.1f  h5:%.1f  h6:%.1f  h7:%.1f  h8:%.1f  ",
+    rec_name.c_str(), rec_age.c_str(),
+    h1, h2, h3, h4, h5, h6, h7, h8
+  );
+
+  newMessageAvailable = true;  // Signal main loop to update display
+}
+
+// Configure hardware timer to periodically refresh DMD
+void setupTimer() {
+  uint8_t cpuClock = ESP.getCpuFreqMHz();
+  timer = timerBegin(0, cpuClock, true);
+  timerAttachInterrupt(timer, &triggerScan, true);
+  timerAlarmWrite(timer, 300, true);
+  timerAlarmEnable(timer);
+}
+
+void setup() {
+  Serial.begin(115200);                // Start serial communication
+  WiFi.mode(WIFI_STA);                // Set WiFi to Station mode
+
+  setupTimer();                        // Initialize DMD refresh timer
+  dmd.selectFont(SystemFont5x7);       // Set font for DMD
+  dmd.clearScreen(true);              // Clear DMD display
+
+  // Initialize ESP-NOW and check for errors
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed!");
+    return;
+  }
+
+  esp_now_register_recv_cb(onDataRecv);  // Register callback for received data
+  Serial.println("ESP32 ready to receive via ESP-NOW");
+}
+
+void loop() {
+  static bool scrollStarted = false;
+  static unsigned long timerScroll = 0;
+  static bool ret = false;
+
+  if (newMessageAvailable) {
+    newMessageAvailable = false;
+
+    dmd.clearScreen(true);  // Clear screen before starting new message
+    delay(500);             // Small delay
+
+    // Start marquee with scroll text
+    dmd.drawMarquee(scrollText, strlen(scrollText), (32 * DISPLAYS_ACROSS) - 1, 0);
+    timerScroll = millis();
+    scrollStarted = true;
+    ret = false;
+  }
+
+  // Continue scrolling text on DMD
+  if (scrollStarted) {
+    if ((timerScroll + 30) < millis()) {
+      ret = dmd.stepMarquee(-1, 0);  // Scroll left
+      delay(50); // ******************************************************** CHANGE VALUE TO CHANGE SCROLL SPEED *************************************
+      timerScroll = millis();
+
+      if (ret) {
+        dmd.drawMarquee(scrollText, strlen(scrollText), (32 * DISPLAYS_ACROSS) - 1, 0);
+        ret = false;
+      }
+    }
+  }
+}

@@ -1,0 +1,143 @@
+// h1 - h8 values _ import and print on p10 display
+
+#include <DMD32.h>
+#include <fonts/SystemFont5x7.h>
+#include <esp_now.h>
+#include <WiFi.h>
+
+#define DISPLAYS_ACROSS 2
+#define DISPLAYS_DOWN 1
+DMD dmd(DISPLAYS_ACROSS, DISPLAYS_DOWN);
+hw_timer_t* timer = nullptr;
+
+typedef struct struct_message {
+  float crown_height, shoulder_height, chest_height;
+  float belly_height, hip_height, knee_height;
+  float hand_reach, elbow_reach;
+  char message[32];
+} struct_message;
+
+struct_message incomingMessage;
+bool newMessageAvailable = false;
+
+// Local variable copies
+float h1, h2, h3, h4, h5, h6, h7, h8;
+
+void IRAM_ATTR triggerScan() {
+  dmd.scanDisplayBySPI();
+}
+
+void onDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
+  memcpy(&incomingMessage, incomingData, sizeof(incomingMessage));
+
+  h1 = incomingMessage.crown_height;
+  h2 = incomingMessage.shoulder_height;
+  h3 = incomingMessage.chest_height;
+  h4 = incomingMessage.belly_height;
+  h5 = incomingMessage.hip_height;
+  h6 = incomingMessage.knee_height;
+  h7 = incomingMessage.hand_reach;
+  h8 = incomingMessage.elbow_reach;
+
+  Serial.println("\n===== New Data Received via ESP-NOW =====");
+  Serial.printf("h1 (Crown Height)   : %.2f cm\n", h1);
+  Serial.printf("h2 (Shoulder Height): %.2f cm\n", h2);
+  Serial.printf("h3 (Chest Height)   : %.2f cm\n", h3);
+  Serial.printf("h4 (Belly Height)   : %.2f cm\n", h4);
+  Serial.printf("h5 (Hip Height)     : %.2f cm\n", h5);
+  Serial.printf("h6 (Knee Height)    : %.2f cm\n", h6);
+  Serial.printf("h7 (Hand Reach)     : %.2f cm\n", h7);
+  Serial.printf("h8 (Elbow Reach)    : %.2f cm\n", h8);
+  Serial.printf("Message             : %s\n", incomingMessage.message);
+  Serial.println("==========================================\n");
+
+  newMessageAvailable = true;
+}
+
+void setupTimer() {
+  uint8_t cpuClock = ESP.getCpuFreqMHz();
+  timer = timerBegin(0, cpuClock, true);
+  timerAttachInterrupt(timer, &triggerScan, true);
+  timerAlarmWrite(timer, 300, true);
+  timerAlarmEnable(timer);
+}
+
+void displayStatic() {
+  dmd.clearScreen(true);
+
+  const int totalW = DISPLAYS_ACROSS * 32;
+  const int colW = totalW / 4;
+
+  String labels[] = {"h1", "h2", "h3", "h4"};
+  String values[] = {
+    String(h1, 1), String(h2, 1), String(h3, 1), String(h4, 1)
+  };
+
+  for (int i = 0; i < 4; i++) {
+    int baseX = i * colW;
+
+    int wL = labels[i].length() * 6;
+    int xL = baseX + (colW - wL) / 2;
+    dmd.drawString(xL, 0, labels[i].c_str(), labels[i].length(), GRAPHICS_NORMAL);
+
+    int wV = values[i].length() * 6;
+    int xV = baseX + (colW - wV) / 2;
+    dmd.drawString(xV, 9, values[i].c_str(), values[i].length(), GRAPHICS_NORMAL);
+  }
+}
+
+void scrollAllText() {
+  char scrollText[256];
+  snprintf(scrollText, sizeof(scrollText),
+    "  h1:%.1f  h2:%.1f  h3:%.1f  h4:%.1f  h5:%.1f  h6:%.1f  h7:%.1f  h8:%.1f  ",
+    h1, h2, h3, h4, h5, h6, h7, h8
+  );
+
+  int screenWidth = DISPLAYS_ACROSS * 32;
+  dmd.clearScreen(true);
+  dmd.drawMarquee(scrollText, strlen(scrollText), screenWidth, 0);
+
+  unsigned long startTime = millis();
+  unsigned long timer_1 = startTime;
+  bool ret = false;
+
+  while (millis() - startTime < 30000) { // 30 seconds scroll
+    if ((timer_1 + 30) < millis()) {
+      ret = dmd.stepMarquee(-1, 0);
+      delay(50);
+      if (ret) {
+        dmd.drawMarquee(scrollText, strlen(scrollText), screenWidth, 0);
+        ret = false;
+      }
+      timer_1 = millis();
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.mode(WIFI_STA);
+
+  setupTimer();
+  dmd.selectFont(SystemFont5x7);
+  dmd.clearScreen(true);
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed!");
+    return;
+  }
+
+  esp_now_register_recv_cb(onDataRecv);
+  Serial.println("ESP32 ready to receive via ESP-NOW");
+}
+
+void loop() {
+  if (newMessageAvailable) {
+    newMessageAvailable = false;
+
+    displayStatic();
+    delay(10000);  // Show static for 10 sec
+
+    scrollAllText();  // Scroll full h1–h8
+  }
+}
