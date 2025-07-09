@@ -1,0 +1,92 @@
+// Code to display static h1 h2 h3 h4 on top line and corresponding values on bottom line 
+// It will display static for  10 seconds then scroll for 20 seconds
+// h1:123  h2:234 ... sample scrolling like this
+
+
+#include <DMD32.h>                    // Library to control P10 LED matrix
+#include <fonts/SystemFont5x7.h>      // Font for text display
+
+#define DISPLAYS_ACROSS 2             // Number of displays horizontally
+#define DISPLAYS_DOWN 1               // Number of displays vertically
+DMD dmd(DISPLAYS_ACROSS, DISPLAYS_DOWN);  // Create DMD object
+
+hw_timer_t* timer = nullptr;          // Timer for refreshing display
+
+// ISR to refresh display
+void IRAM_ATTR triggerScan() {
+  dmd.scanDisplayBySPI();
+}
+
+void setup() {
+  Serial.begin(115200);              // Start serial communication
+  delay(500);                        // Wait for stability
+
+  // Initialize timer to call triggerScan()
+  uint8_t cpuClock = ESP.getCpuFreqMHz();
+  timer = timerBegin(0, cpuClock, true);
+  timerAttachInterrupt(timer, &triggerScan, true);
+  timerAlarmWrite(timer, 300, true);  // Call every 300 ticks
+  timerAlarmEnable(timer);           // Enable timer
+
+  dmd.selectFont(SystemFont5x7);     // Set font for display
+}
+
+// Display static labels and values on screen
+void displayStatic() {
+  const char* labels[] = {"h1", "h2", "h3", "h4"};   // Header labels
+  const char* values[] = {"123", "345", "456", "678"}; // Corresponding values
+
+  dmd.clearScreen(true);            // Clear display
+
+  int totalW = DISPLAYS_ACROSS * 32;  // Total width (64 px for 2 displays)
+  int colW = totalW / 4;              // Width for each label-value pair
+
+  for (int i = 0; i < 4; i++) {
+    int baseX = i * colW;
+
+    // Draw top label
+    int wL = strlen(labels[i]) * 6;     // Width of label text
+    int xL = baseX + (colW - wL) / 2;   // Centered X position
+    dmd.drawString(xL, 0, labels[i], strlen(labels[i]), GRAPHICS_NORMAL);
+
+    // Draw bottom value
+    int wV = strlen(values[i]) * 6;     // Width of value text
+    int xV = baseX + (colW - wV) / 2;   // Centered X position
+    dmd.drawString(xV, 9, values[i], strlen(values[i]), GRAPHICS_NORMAL);
+  }
+}
+
+// Scroll full line text for 20 seconds
+void scrollText() {
+  String txt = "  h1:123  h2:345  h3:456  h4:678   ";  // Message to scroll
+  char scrollText[txt.length() + 1];
+  txt.toCharArray(scrollText, txt.length() + 1);       // Convert to char array
+
+  int screenWidth = DISPLAYS_ACROSS * 32;              // Display width in pixels
+
+  dmd.clearScreen(true);                               // Clear screen
+  dmd.drawMarquee(scrollText, strlen(scrollText), screenWidth, 0);  // Init marquee
+
+  unsigned long startTime = millis();  // Start time
+  unsigned long timer_1 = startTime;   // Scroll step timer
+  bool ret = false;
+
+  while (millis() - startTime < 20000) {  // Run for 20 seconds ========> We can adjust 
+    if ((timer_1 + 30) < millis()) {      // Update scroll every 30ms
+      ret = dmd.stepMarquee(-1, 0);       // Scroll left
+      delay(50);                          // Control scroll speed
+      if (ret) {
+        // Restart scrolling from beginning
+        dmd.drawMarquee(scrollText, strlen(scrollText), screenWidth, 0);
+        ret = false;
+      }
+      timer_1 = millis();                 // Update last scroll time
+    }
+  }
+}
+
+void loop() {
+  displayStatic();     // Show fixed header and values
+  delay(10000);        // Wait for 10 seconds ========= > time dealy between static and scroll 
+  scrollText();        // Show scrolling message
+}

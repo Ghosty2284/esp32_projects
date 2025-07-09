@@ -1,0 +1,55 @@
+
+// ***************************************************** ESP32 VERSION 1.0.6 COMPATIBLE ==> BOARD MANAGER => ESP32 BOARD By expressif version 1.0.6 ************************************** 
+
+
+#include <DMD32.h>                          // DMD library for P10 LED matrix
+#include <fonts/SystemFont4x4.h>            // Small system font (optional, not used here)
+//#include <fonts/Arial_black_16.h>           // Large bold font used for display
+
+#define DISPLAYS_ACROSS 1                 // Number of P10 displays horizontally --
+#define DISPLAYS_DOWN 1                     // Number of P10 displays vertically
+DMD dmd(DISPLAYS_ACROSS, DISPLAYS_DOWN);    // Create DMD object for display
+
+hw_timer_t* timer = NULL;                   // Hardware timer pointer
+
+// Interrupt service routine to refresh the display
+void IRAM_ATTR triggerScan() {
+  dmd.scanDisplayBySPI();                   // Refresh the display via SPI
+}
+
+void setup() {
+  Serial.begin(115200);                     // Initialize serial communication
+  delay(500);
+
+  uint8_t cpuClock = ESP.getCpuFreqMHz();   // Get CPU clock frequency
+
+  // Initialize hardware timer with CPU clock
+  timer = timerBegin(0, cpuClock, true);
+  delay(500);
+
+  // Attach the scan function to the timer interrupt
+  timerAttachInterrupt(timer, &triggerScan, true);
+  delay(500);
+
+  // Set timer to trigger every 300 ticks (adjust for display refresh rate)
+  timerAlarmWrite(timer, 300, true);
+  delay(500);
+
+  // Enable the timer
+  timerAlarmEnable(timer);
+  delay(500);
+}
+
+void loop() {
+
+  dmd.selectFont(SystemFont4x4);        // Set font to bold 16px
+  dmd.clearScreen(true);                 // Clear the display
+  delay(1000);                           // Optional 1 second delay
+
+  // Draw "HELLO" starting from (x = 0, y = 0)
+  dmd.drawString(0, 0, "HELLO", 5, GRAPHICS_NORMAL);
+
+  while (true);                          // Stop looping (optional)
+}    
+  
+
