@@ -1,0 +1,70 @@
+p10_two_board_scroll_text
+
+
+
+#include <DMD32.h>                          // DMD library for P10 LED matrix
+#include <fonts/SystemFont5x7.h>            // Small system font (optional, not used here)
+#include <fonts/Arial_black_16.h>           // Large bold font used for display
+
+#define DISPLAYS_ACROSS 2                   // Number of P10 displays horizontally ----******** CHANGE THIS TO CONTINUE SCROLLING TEXT*************************
+#define DISPLAYS_DOWN 1                     // Number of P10 displays vertically
+DMD dmd(DISPLAYS_ACROSS, DISPLAYS_DOWN);    // Create DMD object for display
+
+hw_timer_t* timer = NULL;                   // Hardware timer pointer
+
+// Interrupt service routine to refresh the display
+void IRAM_ATTR triggerScan() {
+  dmd.scanDisplayBySPI();                   // Refresh the display via SPI
+}
+
+void setup() {
+  Serial.begin(115200);                     // Initialize serial communication
+  delay(500);
+
+  uint8_t cpuClock = ESP.getCpuFreqMHz();   // Get CPU clock frequency
+
+  // Initialize hardware timer with CPU clock
+  timer = timerBegin(0, cpuClock, true);
+  delay(500);
+
+  // Attach the scan function to the timer interrupt
+  timerAttachInterrupt(timer, &triggerScan, true);
+  delay(500);
+
+  // Set timer to trigger every 300 ticks (adjust for display refresh rate)
+  timerAlarmWrite(timer, 300, true);
+  delay(500);
+
+  // Enable the timer
+  timerAlarmEnable(timer);
+  delay(500);
+}
+
+void loop() {
+
+ dmd.selectFont(Arial_Black_16);           // Set display font
+
+  String txt_1 = "HELLO WORLD";                   // Text to display
+  char char_array_txt_1[txt_1.length() + 1];
+  txt_1.toCharArray(char_array_txt_1, txt_1.length() + 1); // Convert to char array
+
+  dmd.clearScreen(true);                    // Clear the display
+  delay(1000);                              // Wait before starting scroll
+
+  // Set up marquee scrolling text from right edge
+  dmd.drawMarquee(char_array_txt_1, txt_1.length(), (32 * DISPLAYS_ACROSS) - 1, 0);
+  
+  long start_1 = millis();                  // Start time for scroll
+  long timer_1 = start_1;
+  boolean ret = false;
+
+  // Scroll text to the left until it finishes
+  while (!ret) {
+    if ((timer_1 + 30) < millis()) {        // Update scroll every ~30ms
+      ret = dmd.stepMarquee(-1, 0);         // Move text left by 1 pixel
+      delay(50);                            // Smooth scrolling delay ----> INCREASE ( SLOW SCROLL ) & DECREASE (FAST SCROLL)
+      timer_1 = millis();                   // Reset timer */
+      
+    }
+  }
+}

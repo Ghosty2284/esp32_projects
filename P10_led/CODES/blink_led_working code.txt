@@ -1,0 +1,46 @@
+//blink_led_working code
+
+#include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
+
+// P10 RGB panel is typically 32x16 pixels
+MatrixPanel_I2S_DMA *dma_display = nullptr;
+
+void setup() {
+  Serial.begin(115200);
+  
+  // Configure for P10 32x16 RGB panel with single data line
+  HUB75_I2S_CFG mxconfig(32, 16, 1);
+  
+  // Configure pins for your P10 panel
+  mxconfig.gpio.r1 = 25;  // DR pin (single RGB data)
+  mxconfig.gpio.g1 = -1;  // Disable separate green
+  mxconfig.gpio.b1 = -1;  // Disable separate blue
+  mxconfig.gpio.a = 23;   // A pin
+  mxconfig.gpio.b = 19;   // B pin
+  mxconfig.gpio.c = -1;   // Not used
+  mxconfig.gpio.d = -1;   // Not used
+  mxconfig.gpio.e = -1;   // Not used
+  mxconfig.gpio.lat = 4;  // LAT pin
+  mxconfig.gpio.oe = 15;  // OE pin
+  mxconfig.gpio.clk = 16; // CLK pin
+  
+  // Create display object
+  dma_display = new MatrixPanel_I2S_DMA(mxconfig);
+  dma_display->begin();
+  dma_display->setBrightness8(90); // Set brightness (0-255)
+  dma_display->clearScreen();
+}
+
+void loop() {
+  // Test: Fill screen with red
+  dma_display->fillScreen(dma_display->color565(255, 0, 0));
+  delay(1000);
+  
+  // Test: Fill screen with green  
+  dma_display->fillScreen(dma_display->color565(0, 255, 0));
+  delay(1000);
+  
+  // Test: Fill screen with blue
+  dma_display->fillScreen(dma_display->color565(0, 0, 255));
+  delay(1000);
+}
