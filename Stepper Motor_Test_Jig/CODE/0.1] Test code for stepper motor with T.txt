@@ -1,0 +1,33 @@
+// Test code for stepper motor with TB6560 motor driver 
+// motor runs 2 turn left and then 2 turn right 
+
+
+const int STEP_PIN = 19;  // Define GPIO 19 as the Step (pulse) pin
+const int DIR_PIN = 17;   // Define GPIO 17 as the Direction control pin
+int Distance = 0;         // Variable to count steps taken
+
+void setup() {
+  pinMode(STEP_PIN, OUTPUT);   // Set Step pin as output
+  pinMode(DIR_PIN, OUTPUT);    // Set Direction pin as output
+
+  digitalWrite(STEP_PIN, LOW); // Start with Step pin LOW
+  digitalWrite(DIR_PIN, LOW);  // Start with Direction pin LOW (default direction)
+}
+
+void loop() {
+  digitalWrite(STEP_PIN, HIGH);     // Generate a HIGH pulse on Step pin
+  delayMicroseconds(100);           // Wait 100 microseconds
+  digitalWrite(STEP_PIN, LOW);      // Set Step pin LOW to complete one pulse
+  delayMicroseconds(100);           // Wait again before next pulse
+
+  Distance++;                       // Count one step
+
+  if (Distance == 6400) {           // If 6400 steps are done (1 full move)
+    delay(500);                     // Pause for half a second
+
+    digitalWrite(DIR_PIN, !digitalRead(DIR_PIN)); // Toggle direction pin
+
+    Distance = 0;                   // Reset step counter
+    delay(500);                     // Pause before resuming next move
+  }
+}

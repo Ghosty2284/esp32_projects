@@ -1,0 +1,39 @@
+Key updates made:
+
+1. **Added Optical Encoder Support**
+   - Defined `ENCODER_PIN` as 14
+   - Added volatile `pulseCount` variable for ISR
+   - Implemented `pulseInterrupt()` ISR for counting rising edges
+   - Added `encoderEnabled` flag to control counting
+
+2. **Added Distance Mode (Mode 5)**
+   - Constant velocity movement while counting pulses
+   - Prints pulses and calculated distance every 100ms
+   - Distance calculated as `pulseCount / 900.0` meters
+   - Handles both outbound and return journeys
+   - Resets pulse counter at start of each movement
+
+3. **Physical Setup Integration**
+   - 900 pulses/meter constant based on:
+     - 5 stepper revs = 32000 steps = 80cm
+     - 1 stepper rev = 4 wheel revs
+     - 1 wheel rev = 36 pulses
+     - Total pulses for 80cm: 5 × 4 × 36 = 720
+     - Pulses/meter: 720 / 0.8 = 900
+   - Start position is 2.5cm right of home
+   - Movement range is 80cm from start position
+
+4. **Safety and Control**
+   - Encoder counting only active during Distance Mode
+   - Emergency stop disables counting
+   - Limit switches stop all motion immediately
+   - Return command works same as other modes
+
+To use Distance Mode:
+1. Select option 5 from main menu
+2. Enter velocity in m/s (e.g., 0.05)
+3. System will move to end position while printing pulses/distance
+4. Type "return" at end position to return to start
+5. System will print return journey distance
+
+The optical encoder provides 1 pulse per 1.11mm of travel (1/900 meters). The distance measurements are relative to the starting position of each movement leg.

@@ -1,0 +1,26 @@
+// === Optical Endstop Sensor Test Code ===
+
+// ESP32 GPIO 14 connected to OUT pin of optical endstop
+
+// This is a sample test code 
+
+const int SENSOR_PIN = 14;  // Connect optical sensor signal pin here
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(SENSOR_PIN, INPUT_PULLUP);  // Use internal pull-up
+  Serial.println("--- Optical Sensor Test ---");
+  Serial.println("Block and unblock the beam to see output change...");
+}
+
+void loop() {
+  int sensorState = digitalRead(SENSOR_PIN);
+
+  if (sensorState == HIGH) {
+    Serial.println("🔴 Beam BLOCKED (flag inserted)");
+  } else {
+    Serial.println("🟢 Beam CLEAR (no flag)");
+  }
+
+  delay(100);  // Check every 100ms
+}

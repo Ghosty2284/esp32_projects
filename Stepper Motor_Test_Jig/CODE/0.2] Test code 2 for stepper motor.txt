@@ -1,0 +1,19 @@
+// Test code for stepper motor & esp32
+// Motor will sun in one direction continuously
+
+const int STEP_PIN = 19;  // GPIO 19 connected to CLK+ (Step input of TB6560)
+const int DIR_PIN = 17;   // GPIO 17 connected to CW+ (Direction input of TB6560)
+
+void setup() {
+  pinMode(STEP_PIN, OUTPUT);   // Set step pin as output
+  pinMode(DIR_PIN, OUTPUT);    // Set direction pin as output
+
+  digitalWrite(DIR_PIN, LOW);  // Set direction: LOW = one direction, HIGH = opposite
+}
+
+void loop() {
+  digitalWrite(STEP_PIN, HIGH);   // Step pin HIGH
+  delayMicroseconds(100);         // Short delay
+  digitalWrite(STEP_PIN, LOW);    // Step pin LOW to complete pulse
+  delayMicroseconds(100);         // Wait before next pulse
+}

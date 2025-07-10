@@ -1,0 +1,956 @@
+esp32_stepper_optical_switch_PID_feedback
+
+// Not tuned 
+
+
+/* CLOSED-LOOP STEPPER MOTOR TEST_JIG CODE WITH OPTICAL ENCODER FEEDBACK
+
+ Enhanced Features:
+ - Real-time position feedback from optical encoder
+ - Velocity and acceleration calculation and display
+ - Closed-loop position control with error correction
+ - PID control for precise positioning
+ - All original 4 modes with enhanced accuracy
+
+ Hardware Setup:
+ - Stepper motor: 1 rev = 4 revs of small wheel
+ - Total travel: 80cm in 5 stepper revolutions
+ - Optical encoder: detects small wheel rotation
+ - Gear ratio: 4:1 (stepper to wheel)
+*/
+
+#include <AccelStepper.h>
+
+// === Pin Definitions ===
+const int STEP_PIN = 19;              // Stepper step signal pin
+const int DIR_PIN = 17;               // Stepper direction signal pin
+const int HOME_SWITCH_PIN = 18;       // Left limit/home switch (active low)
+const int RIGHT_SWITCH_PIN = 4;       // Right safety switch (active low)
+const int ENCODER_PIN = 2;            // Optical encoder pin (interrupt capable)
+
+// === Stepper Setup ===
+AccelStepper stepper(AccelStepper::DRIVER, STEP_PIN, DIR_PIN);
+
+// === System Constants ===
+const float STEPS_PER_METER = 40000.0;          // Motor resolution: steps per meter
+const float MAX_TRAVEL_M = 0.8;                 // Maximum travel distance (80cm)
+const long TARGET_POSITION = MAX_TRAVEL_M * STEPS_PER_METER;  // End position in steps
+const float START_OFFSET_M = 0.25;             // 25cm offset from home position
+const long START_POSITION_STEPS = START_OFFSET_M * STEPS_PER_METER;
+
+// === Encoder Constants ===
+const int ENCODER_PPR = 20;                     // Pulses per revolution (adjust based on your encoder)
+const float GEAR_RATIO = 4.0;                   // Stepper:wheel ratio (1:4)
+const float WHEEL_CIRCUMFERENCE = 0.04;         // Small wheel circumference in meters (adjust as needed)
+const float ENCODER_RESOLUTION = WHEEL_CIRCUMFERENCE / ENCODER_PPR; // Distance per pulse
+
+// === Encoder Variables ===
+volatile long encoderCount = 0;                 // Encoder pulse count
+volatile unsigned long lastEncoderTime = 0;     // Last encoder interrupt time
+float encoderPosition = 0.0;                    // Current position from encoder (meters)
+float encoderVelocity = 0.0;                    // Current velocity (m/s)
+float encoderAcceleration = 0.0;                // Current acceleration (m/s²)
+
+// === Velocity and Acceleration Calculation ===
+float previousVelocity = 0.0;                   // Previous velocity for acceleration calc
+unsigned long previousVelTime = 0;              // Previous velocity calculation time
+float velocityBuffer[5] = {0};                  // Velocity smoothing buffer
+int velocityBufferIndex = 0;                    // Buffer index
+unsigned long lastVelocityUpdate = 0;           // Last velocity update time
+const unsigned long VELOCITY_UPDATE_INTERVAL = 50; // Update velocity every 50ms
+
+// === PID Control Variables ===
+float pidKp = 1.0;                              // Proportional gain
+float pidKi = 0.0;                              // Integral gain  
+float pidKd = 0.0;                             // Derivative gain
+float pidIntegral = 0.0;                        // Integral term
+float pidPrevError = 0.0;                       // Previous error
+unsigned long pidLastTime = 0;                  // Last PID calculation time
+bool pidEnabled = true;                         // PID control enable flag
+
+// === Operating Modes ===
+enum Mode { NONE, ACCEL, CONST_VEL, CALIB, TRAPEZOID };
+Mode currentMode = NONE;
+
+// === Acceleration Mode Variables ===
+float velocity_steps = 0;
+float acceleration_steps = 0;
+bool accel_returning = false;
+bool accel_motionInProgress = false;
+bool accel_waitingForVelocity = true;
+bool accel_waitingAtEnd = false;
+
+// === Constant Velocity Mode Variables ===
+float const_currentVelocity = 0.0;
+bool const_returning = false;
+bool const_motionInProgress = false;
+bool const_waitingAtEnd = false;
+
+// === Trapezoidal Mode Variables ===
+struct TrapezoidalParams {
+  float accelDistance_m;
+  float decelDistance_m;
+  float acceleration_ms2;
+  float cruiseSpeed_ms;
+  long accelDistance_steps;
+  long decelStartPosition_steps;
+  float acceleration_steps;
+  float cruiseSpeed_steps;
+};
+
+TrapezoidalParams trapParams;
+
+enum TrapezoidalState { 
+  TRAP_IDLE, TRAP_ACCELERATING, TRAP_CRUISING, TRAP_DECELERATING, 
+  TRAP_WAITING_AT_END, TRAP_RETURNING
+};
+TrapezoidalState trapState = TRAP_IDLE;
+bool trap_motionInProgress = false;
+bool trap_returning = false;
+int trapInputStep = 0;
+
+// === Calibration Mode Variables ===
+enum HomingState { 
+  WAITING_FOR_START, HOMING_IN_PROGRESS, MOVING_TO_START, 
+  HOMING_COMPLETE, HOMING_FAILED
+};
+HomingState homingState = WAITING_FOR_START;
+
+// === Switch State Variables ===
+bool switchPressed = false;
+bool rightSwitchPressed = false;
+unsigned long lastSwitchTime = 0;
+unsigned long lastRightSwitchTime = 0;
+unsigned long homingStartTime = 0;
+
+// === Timing Constants ===
+const unsigned long HOMING_TIMEOUT_MS = 30000;
+const float HOMING_SPEED_MS = 0.05;
+const float POSITIONING_SPEED_MS = 0.1;
+const int DEBOUNCE_DELAY_MS = 50;
+const int SETTLE_DELAY_MS = 500;
+
+// === Display Variables ===
+unsigned long lastDisplayUpdate = 0;
+const unsigned long DISPLAY_UPDATE_INTERVAL = 100; // Display update every 100ms
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial);
+
+  // Configure pins
+  pinMode(DIR_PIN, OUTPUT);
+  pinMode(HOME_SWITCH_PIN, INPUT_PULLUP);
+  pinMode(RIGHT_SWITCH_PIN, INPUT_PULLUP);
+  pinMode(ENCODER_PIN, INPUT_PULLUP);
+
+  // Initialize stepper
+  stepper.setCurrentPosition(0);
+  
+  // Setup encoder interrupt
+  attachInterrupt(digitalPinToInterrupt(ENCODER_PIN), encoderISR, RISING);
+  
+  // Initialize timing
+  lastVelocityUpdate = millis();
+  pidLastTime = millis();
+  lastDisplayUpdate = millis();
+  
+  Serial.println("Closed-Loop Stepper Motor System Initialized");
+  printMenu();
+}
+
+void loop() {
+  // Handle serial input
+  if (Serial.available() > 0) handleSerialInput();
+  
+  // Update switch states
+  readHomeSwitch();
+  
+  // Update encoder calculations
+  updateEncoderCalculations();
+  
+  // Execute PID control if enabled
+  if (pidEnabled && currentMode != NONE) {
+    executePIDControl();
+  }
+  
+  // Execute current mode
+  switch (currentMode) {
+    case ACCEL: accelModeLoop(); break;
+    case CONST_VEL: constVelModeLoop(); break;
+    case CALIB: calibModeLoop(); break;
+    case TRAPEZOID: trapezoidModeLoop(); break;
+    default: break;
+  }
+  
+  // Run stepper
+  stepper.run();
+  
+  // Display real-time data
+  displayRealtimeData();
+}
+
+// === Encoder Interrupt Service Routine ===
+void encoderISR() {
+  static unsigned long lastInterruptTime = 0;
+  unsigned long currentTime = micros();
+  
+  // Simple debouncing
+  if (currentTime - lastInterruptTime > 100) { // 100 microseconds debounce
+    // Determine direction based on stepper direction
+    if (stepper.speed() > 0) {
+      encoderCount++;
+    } else if (stepper.speed() < 0) {
+      encoderCount--;
+    }
+    lastEncoderTime = currentTime;
+    lastInterruptTime = currentTime;
+  }
+}
+
+// === Encoder Calculations ===
+void updateEncoderCalculations() {
+  unsigned long currentTime = millis();
+  
+  if (currentTime - lastVelocityUpdate >= VELOCITY_UPDATE_INTERVAL) {
+    // Calculate position from encoder
+    encoderPosition = encoderCount * ENCODER_RESOLUTION;
+    
+    // Calculate velocity using time difference
+    static long lastEncoderCount = 0;
+    static unsigned long lastCalcTime = 0;
+    
+    if (lastCalcTime != 0) {
+      float deltaTime = (currentTime - lastCalcTime) / 1000.0; // Convert to seconds
+      float deltaPosition = (encoderCount - lastEncoderCount) * ENCODER_RESOLUTION;
+      
+      if (deltaTime > 0) {
+        float instantVelocity = deltaPosition / deltaTime;
+        
+        // Smooth velocity using moving average
+        velocityBuffer[velocityBufferIndex] = instantVelocity;
+        velocityBufferIndex = (velocityBufferIndex + 1) % 5;
+        
+        float velocitySum = 0;
+        for (int i = 0; i < 5; i++) {
+          velocitySum += velocityBuffer[i];
+        }
+        encoderVelocity = velocitySum / 5.0;
+        
+        // Calculate acceleration
+        if (previousVelTime != 0) {
+          float accelDeltaTime = (currentTime - previousVelTime) / 1000.0;
+          if (accelDeltaTime > 0) {
+            encoderAcceleration = (encoderVelocity - previousVelocity) / accelDeltaTime;
+          }
+        }
+        
+        previousVelocity = encoderVelocity;
+        previousVelTime = currentTime;
+      }
+    }
+    
+    lastEncoderCount = encoderCount;
+    lastCalcTime = currentTime;
+    lastVelocityUpdate = currentTime;
+  }
+}
+
+// === PID Control ===
+void executePIDControl() {
+  unsigned long currentTime = millis();
+  float deltaTime = (currentTime - pidLastTime) / 1000.0;
+  
+  if (deltaTime >= 0.01) { // Execute PID every 10ms
+    // Calculate position error
+    float targetPosition = -stepper.currentPosition() / STEPS_PER_METER; // Convert to meters
+    float positionError = targetPosition - encoderPosition;
+    
+    // Only apply PID if error is significant
+    if (abs(positionError) > 0.001) { // 1mm threshold
+      
+      // PID calculations
+      pidIntegral += positionError * deltaTime;
+      float derivative = (positionError - pidPrevError) / deltaTime;
+      
+      // Calculate PID output
+      float pidOutput = pidKp * positionError + pidKi * pidIntegral + pidKd * derivative;
+      
+      // Apply PID correction to stepper (convert back to steps)
+      long correctionSteps = pidOutput * STEPS_PER_METER;
+      long newTarget = stepper.targetPosition() + correctionSteps;
+      
+      // Limit correction to prevent oscillation
+      correctionSteps = constrain(correctionSteps, -1000, 1000);
+      
+      if (abs(correctionSteps) > 10) { // Only apply significant corrections
+        stepper.moveTo(stepper.targetPosition() + correctionSteps);
+      }
+      
+      pidPrevError = positionError;
+    }
+    
+    pidLastTime = currentTime;
+  }
+}
+
+// === Real-time Display ===
+void displayRealtimeData() {
+  unsigned long currentTime = millis();
+  
+  if (currentTime - lastDisplayUpdate >= DISPLAY_UPDATE_INTERVAL) {
+    if (currentMode != NONE) {
+      Serial.print("Pos: ");
+      Serial.print(encoderPosition * 100, 2); // Convert to cm
+      Serial.print("cm | Vel: ");
+      Serial.print(encoderVelocity * 100, 2); // Convert to cm/s
+      Serial.print("cm/s | Acc: ");
+      Serial.print(encoderAcceleration * 100, 2); // Convert to cm/s²
+      Serial.print("cm/s² | Steps: ");
+      Serial.print(stepper.currentPosition());
+      Serial.print(" | Target: ");
+      Serial.print(stepper.targetPosition());
+      Serial.print(" | Error: ");
+      Serial.print(((-stepper.currentPosition() / STEPS_PER_METER) - encoderPosition) * 1000, 1);
+      Serial.println("mm");
+    }
+    lastDisplayUpdate = currentTime;
+  }
+}
+
+// === Menu & Serial Input ===
+void printMenu() {
+  Serial.println("\n=== Closed-Loop Stepper Motor Control ===");
+  Serial.println("1: Acceleration mode (velocity & acceleration)");
+  Serial.println("2: Constant velocity mode");
+  Serial.println("3: Calibration/Homing mode");
+  Serial.println("4: Trapezoidal motion mode");
+  Serial.println("5: PID tuning mode");
+  Serial.println("6: Reset encoder");
+  Serial.println("Type number and press Enter.");
+  Serial.println("Commands: 'stop', 'return', 'pid on/off'");
+}
+
+void handleSerialInput() {
+  String input = Serial.readStringUntil('\n');
+  input.trim();
+
+  // Emergency stop
+  if (input.equalsIgnoreCase("stop")) {
+    stepper.stop();
+    currentMode = NONE;
+    resetAllModeFlags();
+    Serial.println("EMERGENCY STOP! Motor stopped.");
+    printMenu();
+    return;
+  }
+
+  // PID control toggle
+  if (input.equalsIgnoreCase("pid on")) {
+    pidEnabled = true;
+    Serial.println("PID control enabled");
+    return;
+  }
+  if (input.equalsIgnoreCase("pid off")) {
+    pidEnabled = false;
+    Serial.println("PID control disabled");
+    return;
+  }
+
+  // Return command
+  if (input.equalsIgnoreCase("return")) {
+    handleReturnCommand();
+    return;
+  }
+
+  // Mode selection
+  if (currentMode == NONE) {
+    if (input == "1") {
+      currentMode = ACCEL;
+      accelModeSetup();
+    } else if (input == "2") {
+      currentMode = CONST_VEL;
+      constVelModeSetup();
+    } else if (input == "3") {
+      currentMode = CALIB;
+      calibModeSetup();
+    } else if (input == "4") {
+      currentMode = TRAPEZOID;
+      trapezoidModeSetup();
+    } else if (input == "5") {
+      pidTuningMode();
+    } else if (input == "6") {
+      resetEncoder();
+    } else {
+      Serial.println("Invalid selection.");
+    }
+    return;
+  }
+
+  // Route to mode handlers
+  if (currentMode == ACCEL) accelModeSerial(input);
+  else if (currentMode == CONST_VEL) constVelModeSerial(input);
+  else if (currentMode == CALIB) calibModeSerial(input);
+  else if (currentMode == TRAPEZOID) trapezoidModeSerial(input);
+}
+
+// === Helper Functions ===
+void resetAllModeFlags() {
+  accel_motionInProgress = false;
+  accel_waitingAtEnd = false;
+  const_motionInProgress = false;
+  const_returning = false;
+  const_waitingAtEnd = false;
+  trap_motionInProgress = false;
+  trap_returning = false;
+  trapState = TRAP_IDLE;
+  homingState = WAITING_FOR_START;
+}
+
+void resetEncoder() {
+  encoderCount = 0;
+  encoderPosition = 0.0;
+  encoderVelocity = 0.0;
+  encoderAcceleration = 0.0;
+  pidIntegral = 0.0;
+  pidPrevError = 0.0;
+  Serial.println("Encoder reset to zero");
+}
+
+void pidTuningMode() {
+  Serial.println("\n--- PID Tuning Mode ---");
+  Serial.print("Current PID values - Kp: ");
+  Serial.print(pidKp);
+  Serial.print(", Ki: ");
+  Serial.print(pidKi);
+  Serial.print(", Kd: ");
+  Serial.println(pidKd);
+  Serial.println("Format: 'kp 2.0' or 'ki 0.1' or 'kd 0.05'");
+  Serial.println("Type 'done' when finished");
+  
+  while (true) {
+    if (Serial.available() > 0) {
+      String input = Serial.readStringUntil('\n');
+      input.trim();
+      
+      if (input.equalsIgnoreCase("done")) {
+        break;
+      }
+      
+      int spaceIndex = input.indexOf(' ');
+      if (spaceIndex > 0) {
+        String param = input.substring(0, spaceIndex);
+        float value = input.substring(spaceIndex + 1).toFloat();
+        
+        if (param.equalsIgnoreCase("kp")) {
+          pidKp = value;
+          Serial.print("Kp set to: ");
+          Serial.println(pidKp);
+        } else if (param.equalsIgnoreCase("ki")) {
+          pidKi = value;
+          Serial.print("Ki set to: ");
+          Serial.println(pidKi);
+        } else if (param.equalsIgnoreCase("kd")) {
+          pidKd = value;
+          Serial.print("Kd set to: ");
+          Serial.println(pidKd);
+        }
+      }
+    }
+  }
+  
+  Serial.println("PID tuning complete");
+  printMenu();
+}
+
+void readHomeSwitch() {
+  bool currentSwitchState = !digitalRead(HOME_SWITCH_PIN);
+  bool currentRightSwitchState = !digitalRead(RIGHT_SWITCH_PIN);
+  
+  unsigned long currentTime = millis();
+  
+  if (currentSwitchState != switchPressed) {
+    if (currentTime - lastSwitchTime > DEBOUNCE_DELAY_MS) {
+      switchPressed = currentSwitchState;
+      lastSwitchTime = currentTime;
+    }
+  }
+  
+  if (currentRightSwitchState != rightSwitchPressed) {
+    if (currentTime - lastRightSwitchTime > DEBOUNCE_DELAY_MS) {
+      rightSwitchPressed = currentRightSwitchState;
+      lastRightSwitchTime = currentTime;
+    }
+  }
+}
+
+void handleReturnCommand() {
+  bool returnExecuted = false;
+  
+  switch (currentMode) {
+    case ACCEL:
+      if (accel_waitingAtEnd) {
+        stepper.setMaxSpeed(velocity_steps);
+        stepper.setAcceleration(acceleration_steps);
+        stepper.moveTo(0);
+        accel_returning = true;
+        accel_waitingAtEnd = false;
+        Serial.println("Returning to start with encoder feedback...");
+        returnExecuted = true;
+      }
+      break;
+      
+    case CONST_VEL:
+      if (const_waitingAtEnd) {
+        float returnSpeed = const_currentVelocity * STEPS_PER_METER;
+        stepper.setMaxSpeed(returnSpeed);
+        stepper.setAcceleration(returnSpeed * 2);
+        stepper.moveTo(0);
+        const_returning = true;
+        const_waitingAtEnd = false;
+        Serial.println("Returning with encoder feedback...");
+        returnExecuted = true;
+      }
+      break;
+      
+    case TRAPEZOID:
+      if (trapState == TRAP_WAITING_AT_END) {
+        trapState = TRAP_RETURNING;
+        trap_returning = true;
+        stepper.setMaxSpeed(trapParams.cruiseSpeed_steps);
+        stepper.setAcceleration(trapParams.acceleration_steps);
+        stepper.moveTo(0);
+        Serial.println("Returning with encoder feedback...");
+        returnExecuted = true;
+      }
+      break;
+  }
+  
+  if (!returnExecuted) {
+    Serial.println("Return command not applicable.");
+  }
+}
+
+// === Acceleration Mode ===
+void accelModeSetup() {
+  accel_returning = false;
+  accel_motionInProgress = false;
+  accel_waitingForVelocity = true;
+  accel_waitingAtEnd = false;
+  
+  Serial.println("\n--- Acceleration Mode (Closed-Loop) ---");
+  Serial.println("Enter velocity in m/s (e.g. 0.05):");
+}
+
+void accelModeSerial(String input) {
+  if (accel_waitingForVelocity) {
+    velocity_steps = input.toFloat() * STEPS_PER_METER;
+    Serial.println("Enter acceleration in m/s² (e.g. 0.02):");
+    accel_waitingForVelocity = false;
+  } else {
+    acceleration_steps = input.toFloat() * STEPS_PER_METER;
+    
+    stepper.setMaxSpeed(velocity_steps);
+    stepper.setAcceleration(acceleration_steps);
+    stepper.moveTo(-TARGET_POSITION);
+    accel_motionInProgress = true;
+    Serial.println("Moving with encoder feedback. Watch real-time data!");
+  }
+}
+
+void accelModeLoop() {
+  // Safety checks
+  if ((stepper.currentPosition() > 0 && switchPressed) ||
+      (stepper.currentPosition() < 0 && rightSwitchPressed)) {
+    Serial.println("Limit switch hit! Stopping.");
+    stepper.stop();
+    stepper.setCurrentPosition(0);
+    resetEncoder();
+    accel_motionInProgress = false;
+    currentMode = NONE;
+    printMenu();
+    return;
+  }
+
+  if (!accel_motionInProgress) return;
+
+  if (stepper.distanceToGo() == 0) {
+    if (!accel_returning) {
+      accel_waitingAtEnd = true;
+      Serial.println("Reached end. Encoder position: " + String(encoderPosition * 100) + "cm");
+      Serial.println("Type 'return' to return to start.");
+    } else {
+      accel_motionInProgress = false;
+      accel_returning = false;
+      accel_waitingAtEnd = false;
+      currentMode = NONE;
+      Serial.println("Acceleration mode complete! Final encoder position: " + String(encoderPosition * 100) + "cm");
+      printMenu();
+    }
+  }
+}
+
+// === Constant Velocity Mode ===
+void constVelModeSetup() {
+  Serial.println("\n--- Constant Velocity Mode (Closed-Loop) ---");
+  Serial.println("Enter velocity in m/s (e.g., 0.05):");
+}
+
+void constVelModeSerial(String input) {
+  float velocity = input.toFloat();
+  if (velocity > 0) {
+    startConstVelMotion(velocity);
+  } else {
+    Serial.println("Invalid input. Enter a positive number.");
+  }
+}
+
+void startConstVelMotion(float velocity) {
+  if (velocity < 0.001 || velocity > 15.0) {
+    Serial.println("Velocity out of range! (0.001 to 15.0)");
+    return;
+  }
+  
+  const_returning = false;
+  const_motionInProgress = true;
+  const_waitingAtEnd = false;
+  const_currentVelocity = velocity;
+
+  float velocity_steps = velocity * STEPS_PER_METER;
+  stepper.setMaxSpeed(velocity_steps);
+  stepper.setAcceleration(velocity_steps * 2);
+  stepper.moveTo(-TARGET_POSITION);
+  Serial.println("Moving at constant velocity with encoder feedback!");
+}
+
+void constVelModeLoop() {
+  // Safety checks
+  if ((stepper.currentPosition() > 0 && switchPressed) ||
+      (stepper.currentPosition() < 0 && rightSwitchPressed)) {
+    Serial.println("Limit switch hit! Stopping.");
+    stepper.stop();
+    stepper.setCurrentPosition(0);
+    resetEncoder();
+    const_motionInProgress = false;
+    currentMode = NONE;
+    printMenu();
+    return;
+  }
+
+  if (!const_motionInProgress) return;
+
+  if (stepper.distanceToGo() == 0) {
+    if (!const_returning && !const_waitingAtEnd) {
+      const_waitingAtEnd = true;
+      Serial.println("Reached end. Encoder position: " + String(encoderPosition * 100) + "cm");
+      Serial.println("Type 'return' to return to start.");
+    }
+  }
+
+  if (const_returning && stepper.distanceToGo() == 0) {
+    const_motionInProgress = false;
+    const_returning = false;
+    const_waitingAtEnd = false;
+    currentMode = NONE;
+    Serial.println("Constant velocity mode complete! Final encoder position: " + String(encoderPosition * 100) + "cm");
+    printMenu();
+  }
+}
+
+// === Trapezoidal Mode ===
+void trapezoidModeSetup() {
+  trapInputStep = 0;
+  trap_motionInProgress = false;
+  trap_returning = false;
+  trapState = TRAP_IDLE;
+  
+  Serial.println("\n--- Trapezoidal Motion Mode (Closed-Loop) ---");
+  Serial.println("Enter acceleration distance in meters (e.g., 0.1):");
+}
+
+void trapezoidModeSerial(String input) {
+  if (trapInputStep > 3 && input.equalsIgnoreCase("start")) {
+    startTrapezoidalMotion();
+    return;
+  }
+  
+  if (trapInputStep <= 3) {
+    float value = input.toFloat();
+    
+    switch (trapInputStep) {
+      case 0:
+        if (value <= 0 || value >= MAX_TRAVEL_M) {
+          Serial.println("Invalid acceleration distance. Must be > 0 and < 0.8m");
+          return;
+        }
+        trapParams.accelDistance_m = value;
+        trapInputStep = 1;
+        Serial.println("Enter deceleration distance in meters (e.g., 0.15):");
+        break;
+        
+      case 1:
+        if (value <= 0 || value >= MAX_TRAVEL_M) {
+          Serial.println("Invalid deceleration distance. Must be > 0 and < 0.8m");
+          return;
+        }
+        if ((trapParams.accelDistance_m + value) >= MAX_TRAVEL_M) {
+          Serial.println("Error: Accel + Decel distances exceed total travel!");
+          return;
+        }
+        trapParams.decelDistance_m = value;
+        trapInputStep = 2;
+        Serial.println("Enter acceleration rate in m/s² (e.g., 0.05):");
+        break;
+        
+      case 2:
+        if (value <= 0) {
+          Serial.println("Invalid acceleration. Must be > 0");
+          return;
+        }
+        trapParams.acceleration_ms2 = value;
+        trapInputStep = 3;
+        Serial.println("Enter cruise speed in m/s (e.g., 0.1):");
+        break;
+        
+      case 3:
+        if (value <= 0) {
+          Serial.println("Invalid cruise speed. Must be > 0");
+          return;
+        }
+        trapParams.cruiseSpeed_ms = value;
+        trapInputStep = 4;
+        
+        if (calculateTrapezoidalParams()) {
+          printTrapezoidalSummary();
+          Serial.println("Type 'start' to begin trapezoidal motion:");
+        } else {
+          Serial.println("Invalid parameters! Resetting...");
+          trapezoidModeSetup();
+        }
+        break;
+    }
+  }
+}
+
+bool calculateTrapezoidalParams() {
+  trapParams.accelDistance_steps = trapParams.accelDistance_m * STEPS_PER_METER;
+  trapParams.decelStartPosition_steps = -(MAX_TRAVEL_M - trapParams.decelDistance_m) * STEPS_PER_METER;
+  trapParams.acceleration_steps = trapParams.acceleration_ms2 * STEPS_PER_METER;
+  trapParams.cruiseSpeed_steps = trapParams.cruiseSpeed_ms * STEPS_PER_METER;
+  
+  float maxSpeedReachable = sqrt(2.0 * trapParams.acceleration_ms2 * trapParams.accelDistance_m);
+  
+  if (trapParams.cruiseSpeed_ms > maxSpeedReachable) {
+    Serial.println("Error: Cruise speed too high for given acceleration distance!");
+    return false;
+  }
+  
+  return true;
+}
+
+void printTrapezoidalSummary() {
+  Serial.println("\n--- Trapezoidal Motion Parameters ---");
+  Serial.print("Acceleration distance: ");
+  Serial.print(trapParams.accelDistance_m * 100);
+  Serial.println(" cm");
+  Serial.print("Deceleration distance: ");
+  Serial.print(trapParams.decelDistance_m * 100);
+  Serial.println(" cm");
+  Serial.print("Cruise distance: ");
+  Serial.print((MAX_TRAVEL_M - trapParams.accelDistance_m - trapParams.decelDistance_m) * 100);
+  Serial.println(" cm");
+  Serial.print("Acceleration rate: ");
+  Serial.print(trapParams.acceleration_ms2);
+  Serial.println(" m/s²");
+  Serial.print("Cruise speed: ");
+  Serial.print(trapParams.cruiseSpeed_ms);
+  Serial.println(" m/s");
+  Serial.println("Real-time encoder feedback will be displayed during motion");
+}
+
+void startTrapezoidalMotion() {
+  if (trap_motionInProgress) {
+    Serial.println("Motion already in progress.");
+    return;
+  }
+  
+  trap_motionInProgress = true;
+  trap_returning = false;
+  trapState = TRAP_ACCELERATING;
+  
+  stepper.setMaxSpeed(trapParams.cruiseSpeed_steps);
+  stepper.setAcceleration(trapParams.acceleration_steps);
+  stepper.moveTo(-trapParams.accelDistance_steps);
+  
+  Serial.println("Starting trapezoidal motion with encoder feedback!");
+  Serial.println("Phase: ACCELERATING");
+}
+
+void trapezoidModeLoop() {
+  // Safety checks
+  if ((stepper.currentPosition() > 0 && switchPressed) ||
+      (stepper.currentPosition() < 0 && rightSwitchPressed)) {
+
+    Serial.println("Limit switch hit! Stopping.");
+    stepper.stop();
+    stepper.setCurrentPosition(0);
+    resetEncoder();
+    trap_motionInProgress = false;
+    trapState = TRAP_IDLE;
+    currentMode = NONE;
+    printMenu();
+    return;
+  }
+
+  if (!trap_motionInProgress) return;
+
+  switch (trapState) {
+    case TRAP_ACCELERATING:
+      if (stepper.distanceToGo() == 0) {
+        // Acceleration phase complete, start cruising
+        trapState = TRAP_CRUISING;
+        stepper.setMaxSpeed(trapParams.cruiseSpeed_steps);
+        stepper.setAcceleration(trapParams.acceleration_steps);
+        stepper.moveTo(trapParams.decelStartPosition_steps);
+        Serial.println("Phase: CRUISING");
+      }
+      break;
+      
+    case TRAP_CRUISING:
+      if (stepper.distanceToGo() == 0) {
+        // Cruising phase complete, start decelerating
+        trapState = TRAP_DECELERATING;
+        stepper.setMaxSpeed(trapParams.cruiseSpeed_steps);
+        stepper.setAcceleration(trapParams.acceleration_steps);
+        stepper.moveTo(-TARGET_POSITION);
+        Serial.println("Phase: DECELERATING");
+      }
+      break;
+      
+    case TRAP_DECELERATING:
+      if (stepper.distanceToGo() == 0) {
+        // Deceleration phase complete
+        if (!trap_returning) {
+          trapState = TRAP_WAITING_AT_END;
+          Serial.println("Trapezoidal motion complete! Encoder position: " + String(encoderPosition * 100) + "cm");
+          Serial.println("Type 'return' to return to start.");
+        } else {
+          // Return journey complete
+          trap_motionInProgress = false;
+          trap_returning = false;
+          trapState = TRAP_IDLE;
+          currentMode = NONE;
+          Serial.println("Return journey complete! Final encoder position: " + String(encoderPosition * 100) + "cm");
+          printMenu();
+        }
+      }
+      break;
+      
+    case TRAP_RETURNING:
+      if (stepper.distanceToGo() == 0) {
+        trap_motionInProgress = false;
+        trap_returning = false;
+        trapState = TRAP_IDLE;
+        currentMode = NONE;
+        Serial.println("Trapezoidal mode complete! Final encoder position: " + String(encoderPosition * 100) + "cm");
+        printMenu();
+      }
+      break;
+      
+    default:
+      break;
+  }
+}
+
+// === Calibration Mode ===
+void calibModeSetup() {
+  homingState = WAITING_FOR_START;
+  Serial.println("\n--- Calibration/Homing Mode (Closed-Loop) ---");
+  Serial.println("This will move the carriage to the home position.");
+  Serial.println("WARNING: Ensure the path is clear!");
+  Serial.println("Type 'start' to begin homing sequence:");
+}
+
+void calibModeSerial(String input) {
+  if (input.equalsIgnoreCase("start") && homingState == WAITING_FOR_START) {
+    startHomingSequence();
+  } else if (homingState == HOMING_COMPLETE) {
+    Serial.println("Homing already complete. Returning to main menu.");
+    currentMode = NONE;
+    printMenu();
+  } else {
+    Serial.println("Invalid command. Type 'start' to begin homing.");
+  }
+}
+
+void startHomingSequence() {
+  homingState = HOMING_IN_PROGRESS;
+  homingStartTime = millis();
+  
+  // Set slow speed for homing
+  float homingSpeed = HOMING_SPEED_MS * STEPS_PER_METER;
+  stepper.setMaxSpeed(homingSpeed);
+  stepper.setAcceleration(homingSpeed * 2);
+  
+  // Move toward home switch (positive direction)
+  stepper.moveTo(100000); // Large positive number to ensure continuous movement
+  
+  Serial.println("Homing in progress... Moving toward home switch with encoder feedback");
+  Serial.println("Encoder will be reset when home switch is triggered");
+}
+
+void calibModeLoop() {
+  if (homingState == HOMING_IN_PROGRESS) {
+    // Check for timeout
+    if (millis() - homingStartTime > HOMING_TIMEOUT_MS) {
+      Serial.println("Homing timeout! Unable to find home switch.");
+      homingState = HOMING_FAILED;
+      stepper.stop();
+      currentMode = NONE;
+      printMenu();
+      return;
+    }
+    
+    // Check if home switch is pressed
+    if (switchPressed) {
+      Serial.println("Home switch triggered! Stopping and setting home position.");
+      stepper.stop();
+      
+      // Wait for motor to settle
+      delay(SETTLE_DELAY_MS);
+      
+      // Set current position as home (0)
+      stepper.setCurrentPosition(0);
+      
+      // Reset encoder at home position
+      resetEncoder();
+      
+      // Move to start position (2.5cm from home)
+      homingState = MOVING_TO_START;
+      float positioningSpeed = POSITIONING_SPEED_MS * STEPS_PER_METER;
+      stepper.setMaxSpeed(positioningSpeed);
+      stepper.setAcceleration(positioningSpeed * 2);
+      stepper.moveTo(-START_POSITION_STEPS);
+      
+      Serial.println("Moving to start position (2.5cm from home)...");
+    }
+  }
+  else if (homingState == MOVING_TO_START) {
+    if (stepper.distanceToGo() == 0) {
+      homingState = HOMING_COMPLETE;
+      Serial.println("Homing sequence complete!");
+      Serial.println("Encoder position: " + String(encoderPosition * 100) + "cm");
+      Serial.println("Motor is now at start position (2.5cm from home)");
+      Serial.println("System is calibrated and ready for operation.");
+      Serial.println("Press any key to return to main menu.");
+    }
+  }
+  else if (homingState == HOMING_COMPLETE) {
+    // Wait for user input to return to menu
+    if (Serial.available() > 0) {
+      Serial.readStringUntil('\n'); // Clear input buffer
+      currentMode = NONE;
+      printMenu();
+    }
+  }
+}

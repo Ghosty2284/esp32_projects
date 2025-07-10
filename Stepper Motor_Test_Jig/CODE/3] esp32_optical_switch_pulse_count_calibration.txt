@@ -1,0 +1,68 @@
+0] esp32_optical_switch_pulse_count_calibration 
+
+
+// === IR Sensor Pulse Counter with Debounce ===
+
+/*
+====================================================================================================================
+THIS IS A TEST CODE TO COUNT TOTAL NUMBER OF PULSES OF THE OPTICAL LIMIT SWITCH SENSOR 
+Adjust the debounce time to calibrate sensor for pulses 
+eg : For wheel with 36 spikes ( and equivalent slits between them ) the sensor should detect 36 pulses in one revolution of wheel
+So adjust the Debounce time accordingly to get the required value.
+
+*/
+
+const int ENCODER_PIN = 14;              // IR sensor signal pin connected to GPIO 14
+volatile unsigned long pulseCount = 0;   // Variable to store the number of valid pulses counted
+volatile unsigned long lastPulseTime = 0; // Stores the timestamp of the last valid pulse (for debouncing)
+
+// ADJUST THE BELOW VALUE FOR CALIBRATION ==================================================================================================
+const unsigned long debounceTime = 20050; // Minimum time (in microseconds) between valid pulses to avoid false triggering
+//===========================================================================================================================================
+
+bool counting = false;  // Flag to track whether pulse counting is active or not
+
+// Interrupt Service Routine (ISR) triggered on a falling edge of the IR sensor signal
+void IRAM_ATTR handlePulse() {
+  unsigned long now = micros();  // Get current time in microseconds since the program started
+
+  // Check if counting is active and if enough time has passed since the last pulse (debounce)
+  if (counting && (now - lastPulseTime > debounceTime)) {
+    pulseCount++;           // Increment the pulse count
+    lastPulseTime = now;    // Update the last valid pulse time
+  }
+}
+
+void setup() {
+  Serial.begin(115200);                // Start serial communication at 115200 baud
+  pinMode(ENCODER_PIN, INPUT);         // Set the encoder pin as input
+
+  // Attach an interrupt to the encoder pin that triggers on a falling edge
+  // You can change FALLING to RISING if your IR sensor works the other way
+  attachInterrupt(digitalPinToInterrupt(ENCODER_PIN), handlePulse, FALLING);
+
+  // Initial messages to guide user via Serial Monitor
+  Serial.println("=== Optical Encoder Pulse Counter ===");
+  Serial.println("Type 'start' to begin counting.");
+  Serial.println("Type 'stop' to stop counting and display total pulses.");
+}
+
+void loop() {
+  // Check if there's incoming data from Serial Monitor
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');  // Read user input until newline
+    command.trim();  // Remove any trailing newline or spaces
+
+    if (command.equalsIgnoreCase("start")) {
+      pulseCount = 0;                 // Reset pulse counter
+      lastPulseTime = micros();       // Initialize last pulse time
+      counting = true;                // Enable counting
+      Serial.println("Pulse counting started...");
+    } 
+    else if (command.equalsIgnoreCase("stop")) {
+      counting = false;               // Disable counting
+      Serial.print("Pulse counting stopped. Total pulses counted: ");
+      Serial.println(pulseCount);     // Display total number of pulses
+    }
+  }
+}
