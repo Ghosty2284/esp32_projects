@@ -1,0 +1,3 @@
+#Overview
+This project contains a basic test_jig consisting of a stepper motor which drives a belt through axle. Object is placed on the belt which can move roughly about  100cm.
+Start position is 2.5cm right of home postition ( where stepper is attached)
