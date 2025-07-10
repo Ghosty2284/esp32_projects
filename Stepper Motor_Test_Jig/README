@@ -1,3 +1,19 @@
-# Overview
+ Overview :
 This project contains a basic test_jig consisting of a stepper motor which drives a belt through axle. Object is placed on the belt which can move roughly about  100cm.
-Start position is 2.5cm right of home postition ( where stepper is attached)
+Start position is 2.5cm right of home postition ( where stepper is attached). Start to end distance is 80cm.
+
+Features :
+
+1. 4 motion profiles : a. Acceleration - User define accelration and target velcoity for the object. 
+                       b. Constant Velocity - User define constant velocity 
+                       c. Trapezoidal mode - User define accelration & deceleration distance , cruise velocity , acceleration/deceleration ( note should obey v^2=2u+as) 
+                       d. Distance mode - User defined distance 
+
+2.  Safety switches - On both ends to avoid overshooting of the object 
+
+3. E-Stop - Emergency stop command for object to hault motor immediately after command is sent. 
+
+4. Home/Calibration - Object automatically finds home postion and then calibrates to start postion
+
+5. Optical encoder - To count pulses and can be used as feedback.
+
