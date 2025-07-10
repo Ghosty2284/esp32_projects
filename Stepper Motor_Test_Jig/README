@@ -1,7 +1,18 @@
  Overview :
+
 This project contains a basic test_jig consisting of a stepper motor which drives a belt through axle. Object is placed on the belt which can move roughly about  100cm.
 Start position is 2.5cm right of home postition ( where stepper is attached). Start to end distance is 80cm.
+=============================================================================================================================================================
+COMPONENTS USED:
 
+1. Nema 17 Stepper Motor 24V
+
+2. TB6560 Motor driver updated
+
+3. optical endstop photoelectric light control optical limit switch for 3D printer
+
+
+===============================================================================================================================================================
 Features :
 
 1. 4 motion profiles : a. Acceleration - User define accelration and target velcoity for the object. 
